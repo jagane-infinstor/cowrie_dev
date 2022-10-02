@@ -15,6 +15,11 @@ from twisted.python import log
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
 
+import os
+import tempfile
+import hashlib
+import json
+
 
 class Output(cowrie.core.output.Output):
     """
@@ -51,10 +56,28 @@ class Output(cowrie.core.output.Output):
 
     def write(self, entry):
         if entry["eventid"] == "cowrie.session.file_download":
-            self.upload(entry["shasum"], entry["outfile"])
+            self.upload('cowrie/downloads/' + entry["shasum"], entry["outfile"])
 
         elif entry["eventid"] == "cowrie.session.file_upload":
-            self.upload(entry["shasum"], entry["outfile"])
+            self.upload('cowrie/uploads/' + entry["shasum"], entry["outfile"])
+        else:
+            for i in list(entry.keys()):
+                # Remove twisted 15 legacy keys
+                if i.startswith("log_") or i == "time" or i == "system":
+                    del entry[i]
+            try:
+                tfd, tfname = tempfile.mkstemp()
+                with os.fdopen(tfd, 'w') as f:
+                    json.dump(entry, f, separators=(",", ":"))
+                    f.write("\n")
+                    f.flush()
+                sha1 = hashlib.sha256()
+                sha1.update(json.dumps(entry).encode('utf-8'))
+                if 'session' in entry and entry['session']:
+                    self.upload('cowrie/events/' + entry['session'] + '-' + sha1.hexdigest(), tfname)
+            except TypeError as te:
+                print("s3: Can't serialize: '" + repr(entry) + "'")
+                print("s3: error=" + str(te))
 
     @defer.inlineCallbacks
     def _object_exists_remote(self, shasum):
@@ -92,5 +115,5 @@ class Output(cowrie.core.output.Output):
                 Body=fp.read(),
                 ContentType="application/octet-stream",
             )
-
+        os.unlink(filename)
         self.seen.add(shasum)
